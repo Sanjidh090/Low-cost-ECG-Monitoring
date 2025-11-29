@@ -533,13 +533,17 @@ class ECGDataGenerator:
 class ESP32SerialReader:
     """Read real-time ECG data from ESP32 via serial port."""
     
+    # Read extra samples to catch up with serial buffer (2x requested)
+    READ_MULTIPLIER = 2
+    # Number of fallback samples when no ESP32 data is available
+    FALLBACK_SAMPLES = 2
+    
     def __init__(self, port="COM4", baud_rate=115200):
         self.port = port
         self.baud_rate = baud_rate
         self.serial_connection = None
         self.is_connected = False
-        self.last_value = 2048  # Default baseline value
-        self.buffer = deque(maxlen=100)  # Buffer for incoming data
+        self.last_value = 2048  # Default baseline value (mid-range for 12-bit ADC)
     
     @staticmethod
     def get_available_ports():
@@ -588,6 +592,7 @@ class ESP32SerialReader:
         """Read multiple ECG samples from serial port.
         
         Returns a list of ECG values read from the ESP32.
+        Reads extra samples (READ_MULTIPLIER) to keep up with the serial buffer.
         """
         samples = []
         
@@ -595,8 +600,9 @@ class ESP32SerialReader:
             return samples
         
         try:
-            # Read available data from serial buffer
-            for _ in range(num_samples * 2):  # Try to read more to catch up
+            # Read more than requested to catch up with serial buffer
+            max_reads = num_samples * self.READ_MULTIPLIER
+            for _ in range(max_reads):
                 if self.serial_connection.in_waiting > 0:
                     raw = self.serial_connection.readline()
                     line_raw = raw.decode(errors="ignore").strip()
@@ -619,8 +625,9 @@ class ESP32SerialReader:
                     
         except serial.SerialException:
             self.is_connected = False
-        except Exception:
-            pass
+        except OSError:
+            # Handle OS-level serial port errors (e.g., device disconnected)
+            self.is_connected = False
         
         return samples
     
@@ -968,9 +975,9 @@ def main():
             samples = st.session_state.esp32_reader.read_samples(10)
             for new_val in samples:
                 st.session_state.data_buffer.append(new_val)
-            # If no samples read, use last known value to maintain display
+            # If no samples read, add fallback samples to maintain display continuity
             if not samples:
-                for _ in range(2):
+                for _ in range(ESP32SerialReader.FALLBACK_SAMPLES):
                     new_val = st.session_state.esp32_reader.last_value
                     st.session_state.data_buffer.append(new_val)
         else:
